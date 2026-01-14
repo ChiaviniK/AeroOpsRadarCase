@@ -9,19 +9,12 @@ from geopy.distance import geodesic
 # --- Configuração "Air Traffic Control (ATC)" ---
 st.set_page_config(page_title="AeroOps Radar", page_icon="✈️", layout="wide")
 
-# --- CSS CUSTOMIZADO: ESTILO RADAR/HACKER ---
+# --- CSS CUSTOMIZADO ---
 st.markdown("""
 <style>
-    /* Fundo Escuro Profundo */
     .stApp { background-color: #050505; color: #00ff41; }
-    
-    /* Fontes Monoespaçadas (Estilo Terminal) */
     h1, h2, h3, div, span, p, label { font-family: 'Courier New', monospace !important; }
-    
-    /* Títulos em Verde Neon */
     h1, h2, h3 { color: #00ff41 !important; text-transform: uppercase; text-shadow: 0 0 5px #003300; }
-    
-    /* Cards de Métricas */
     div[data-testid="stMetric"] {
         background-color: #0f111a;
         border: 1px solid #00ff41;
@@ -30,15 +23,11 @@ st.markdown("""
     }
     div[data-testid="stMetricLabel"] { color: #00cc33; font-size: 0.8rem; }
     div[data-testid="stMetricValue"] { color: #ffffff; text-shadow: 0 0 5px #fff; }
-    
-    /* Inputs */
     .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div {
         background-color: #0f111a;
         color: #00ff41;
         border: 1px solid #004411;
     }
-    
-    /* Botões */
     .stButton>button {
         background-color: #003300; 
         color: #00ff41; 
@@ -55,43 +44,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÕES DE DADOS (ROBUSTAS) ---
+# --- FUNÇÕES DE DADOS (SEM ELEMENTOS VISUAIS DENTRO DO CACHE) ---
 
 @st.cache_data(ttl=30)
 def get_live_flights():
     """
-    Busca voos na OpenSky. 
-    Se falhar ou demorar > 4s, gera dados fake para não travar a aula.
+    Apenas processa dados. Retorna o DataFrame e um Booleano (True=Real, False=Fake).
+    NÃO TEM st.toast AQUI DENTRO.
     """
-    # Bounding Box aproximado do Brasil
     url = "https://opensky-network.org/api/states/all?lamin=-33.7&lomin=-73.9&lamax=5.2&lomax=-34.7"
     
     # 1. Tenta API Real
     try:
-        r = requests.get(url, timeout=4) # Timeout curto para agilidade
+        r = requests.get(url, timeout=4)
         if r.status_code == 200:
             data = r.json()
-            if data['states'] is None: raise Exception("Sem dados na área")
+            if data['states'] is None: raise Exception("Sem dados")
             
             cols = ['icao24', 'callsign', 'origin_country', 'time_position', 'last_contact', 'longitude', 'latitude', 'baro_altitude', 'on_ground', 'velocity', 'true_track', 'vertical_rate', 'sensors', 'geo_altitude', 'squawk', 'spi', 'position_source']
             df = pd.DataFrame(data['states'], columns=cols)
             
-            # Limpeza
             df['callsign'] = df['callsign'].str.strip()
-            # Filtra voos voando (não no chão) e altitude de cruzeiro
             df = df[(df['baro_altitude'] > 2000) & (df['velocity'] > 50)]
             df = df.dropna(subset=['latitude', 'longitude'])
             
             if not df.empty:
-                st.toast("📡 Link OpenSky: ATIVO (Dados Reais)", icon="🟢")
-                return df, True
+                return df, True # Retorna True para dados reais
     except:
-        pass # Falhou, vai para simulação
+        pass 
 
     # 2. Simulação (Fallback)
-    st.toast("⚠️ Link OpenSky: INSTÁVEL (Modo Simulação Ativo)", icon="🟠")
     dados_fake = []
-    # Gera rotas aleatórias sobre SP/Rio/Minas
     for i in range(20):
         lat = -23.5 + random.uniform(-5, 5)
         lon = -46.6 + random.uniform(-5, 5)
@@ -99,15 +82,14 @@ def get_live_flights():
             'callsign': f"GLO{random.randint(1000, 9999)}",
             'latitude': lat,
             'longitude': lon,
-            'velocity': random.uniform(200, 260), # m/s
+            'velocity': random.uniform(200, 260),
             'baro_altitude': random.uniform(8000, 11000),
             'origin_country': 'Brazil',
             'true_track': random.uniform(0, 360)
         })
-    return pd.DataFrame(dados_fake), False
+    return pd.DataFrame(dados_fake), False # Retorna False para simulado
 
 def get_weather(lat, lon):
-    """Busca clima na Open-Meteo (Muito estável)"""
     try:
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,precipitation,wind_speed_10m&timezone=America%2FSao_Paulo"
         r = requests.get(url, timeout=5)
@@ -115,10 +97,18 @@ def get_weather(lat, lon):
     except:
         return {'temperature_2m': 25.0, 'precipitation': 0.0, 'wind_speed_10m': 10.0}
 
-# --- CARGA DE DADOS ---
+# --- LOGICA DE EXIBIÇÃO (TOASTS AQUI FORA) ---
+
+# Chama a função cached
 df_voos, is_real_data = get_live_flights()
 
-# --- SIDEBAR: PLANO DE VOO ---
+# Mostra os avisos agora (fora do cache)
+if is_real_data:
+    st.toast("📡 Link OpenSky: ATIVO (Dados Reais)", icon="🟢")
+else:
+    st.toast("⚠️ Link OpenSky: INSTÁVEL (Modo Simulação Ativo)", icon="🟠")
+
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("AERO.OPS // ATC")
     st.image("https://img.icons8.com/fluency/96/airport.png", width=80)
@@ -132,9 +122,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("✈️ Rota Monitorada")
-    st.caption("Defina origem/destino para cálculo de atraso.")
     
-    # Inputs com valores padrão (GRU -> GIG)
     origem_lat = st.number_input("Lat Origem (GRU)", value=-23.4356, format="%.4f")
     origem_lon = st.number_input("Lon Origem (GRU)", value=-46.4731, format="%.4f")
     
@@ -144,7 +132,7 @@ with st.sidebar:
 # --- INTERFACE PRINCIPAL ---
 st.title("TORRE DE CONTROLE: MONITORAMENTO AÉREO")
 
-# 1. MAPA DE RADAR
+# 1. MAPA
 st.subheader("📍 Radar Tático (Brasil)")
 
 if not df_voos.empty:
@@ -168,67 +156,49 @@ else:
 
 st.markdown("---")
 
-# 2. PAINEL DE OPERAÇÕES (Análise de Voo Único)
+# 2. PAINEL DE PREDIÇÃO
 st.subheader("🛑 Predição de Atrasos & Telemetria")
 
 if not df_voos.empty:
-    # Seleção de Voo
     voos_lista = df_voos['callsign'].unique()
     voo_selecionado = st.selectbox("SELECIONE A AERONAVE PARA RASTREIO:", voos_lista)
     
     if voo_selecionado:
-        # Filtra dados do voo
         dado = df_voos[df_voos['callsign'] == voo_selecionado].iloc[0]
-        
-        # Coleta Clima (API Real)
         clima_dest = get_weather(dest_lat, dest_lon)
         
-        # --- CÁLCULOS MATEMÁTICOS (GEOPY) ---
+        # Cálculos
         pos_aviao = (dado['latitude'], dado['longitude'])
         pos_dest = (dest_lat, dest_lon)
-        
-        # Distância Geodésica (considera a curvatura da Terra)
         dist_km = geodesic(pos_aviao, pos_dest).km
-        
-        # Velocidade: API traz m/s, convertemos para km/h
         vel_kmh = dado['velocity'] * 3.6
-        altitude_ft = dado['baro_altitude'] * 3.28084 # Metros para Pés
+        altitude_ft = dado['baro_altitude'] * 3.28084
         
-        # ETA (Estimativa de Tempo de Chegada)
         if vel_kmh > 0:
-            horas_restantes = dist_km / vel_kmh
-            minutos_restantes = int(horas_restantes * 60)
+            minutos_restantes = int((dist_km / vel_kmh) * 60)
         else:
             minutos_restantes = 999
             
-        # --- ALGORITMO DE RISCO (REGRAS DE NEGÓCIO) ---
+        # Risco
         risco_score = 0
         fatores = []
         
-        # 1. Vento Forte no Destino (> 25 km/h)
-        vento = clima_dest['wind_speed_10m']
-        if vento > 25:
+        if clima_dest['wind_speed_10m'] > 25:
             risco_score += 30
-            fatores.append(f"Vento Cruzado ({vento} km/h)")
+            fatores.append(f"Vento Cruzado ({clima_dest['wind_speed_10m']} km/h)")
             
-        # 2. Chuva no Destino (> 0 mm)
-        chuva = clima_dest['precipitation']
-        if chuva > 0.5:
+        if clima_dest['precipitation'] > 0.5:
             risco_score += 40
-            fatores.append(f"Chuva na Pista ({chuva} mm)")
+            fatores.append(f"Chuva na Pista ({clima_dest['precipitation']} mm)")
             
-        # 3. Velocidade Baixa em Rota (< 600 km/h e alto)
         if vel_kmh < 600 and altitude_ft > 20000:
             risco_score += 20
             fatores.append("Velocidade Cruzeiro Baixa")
             
-        # Penalidade por Distância Longa
         if minutos_restantes > 120:
             risco_score += 10
 
-        # --- EXIBIÇÃO ---
-        
-        # Linha 1: Métricas de Voo
+        # Exibição
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("CALLSIGN", voo_selecionado)
         c2.metric("VELOCIDADE", f"{int(vel_kmh)} km/h")
@@ -237,7 +207,6 @@ if not df_voos.empty:
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Linha 2: Clima e Risco
         col_risk, col_env = st.columns([1, 2])
         
         with col_risk:
@@ -251,14 +220,13 @@ if not df_voos.empty:
             else:
                 st.success(f"NOMINAL ({risco_score}%)")
                 st.markdown("🟢 **VOO NO HORÁRIO**")
-                
+            
             if fatores:
-                st.markdown("**Fatores de Atraso:**")
+                st.markdown("**Fatores:**")
                 for f in fatores: st.caption(f"> {f}")
         
         with col_env:
             st.markdown("#### TELEMETRIA AMBIENTAL (DESTINO)")
-            # Criando um DataFrame visual para o clima
             df_clima = pd.DataFrame([
                 {"METRIC": "TEMPERATURA", "VALUE": f"{clima_dest['temperature_2m']} °C"},
                 {"METRIC": "PRECIPITAÇÃO", "VALUE": f"{clima_dest['precipitation']} mm"},
@@ -266,19 +234,10 @@ if not df_voos.empty:
             ])
             st.dataframe(df_clima, hide_index=True, use_container_width=True)
 
-# --- RODAPÉ / DOWNLOADS ---
+# --- DOWNLOADS ---
 st.markdown("---")
 st.subheader("💾 CAIXA PRETA (LOGS)")
 
 if not df_voos.empty:
-    col_dl1, col_dl2 = st.columns([1, 3])
-    with col_dl1:
-        csv = df_voos.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 BAIXAR DADOS DE VOO (CSV)",
-            data=csv,
-            file_name="flight_log_blackbox.csv",
-            mime="text/csv"
-        )
-    with col_dl2:
-        st.caption("AeroOps Control System v4.2 | Connected to OpenSky Network & Open-Meteo")
+    csv = df_voos.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 BAIXAR DADOS DE VOO (CSV)", csv, "flight_log.csv", "text/csv")
