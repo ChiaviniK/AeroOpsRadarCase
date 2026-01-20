@@ -4,69 +4,72 @@ import requests
 import plotly.express as px
 from datetime import datetime
 from geopy.distance import geodesic
-import json
 
 # --- Configuração ---
-st.set_page_config(page_title="AeroOps | Real Data", page_icon="📡", layout="wide")
+st.set_page_config(page_title="AeroOps | ADSB.lol", page_icon="✈️", layout="wide")
 
 st.markdown("""
 <style>
-    .stApp { background-color: #000000; color: #00ff41; }
+    .stApp { background-color: #0d1117; color: #58a6ff; }
     h1, h2, h3, div, span, p { font-family: 'Consolas', monospace !important; }
     .stButton>button {
-        background-color: #004400; color: #00ff41; border: 1px solid #00ff41;
-        width: 100%; height: 60px; font-size: 20px;
+        background-color: #238636; color: white; border: none;
+        width: 100%; height: 50px; font-weight: bold;
     }
-    .stButton>button:hover { background-color: #00ff41; color: black; }
-    div[data-testid="stMetric"] { background-color: #111; border: 1px solid #333; }
+    div[data-testid="stMetric"] { background-color: #161b22; border: 1px solid #30363d; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- SNAPSHOT DE DADOS REAIS (BACKUP DE SEGURANÇA) ---
-# Dados reais capturados de SBGR (Guarulhos) para usar quando a API der erro 429
-SNAPSHOT_REAL_DATA = [
-    ["c05872", "TAM3256 ", "Brazil", 1716231245, 1716231245, -46.4731, -23.4356, 762.0, False, 75.3, 106.3, -4.23, None, 784.8, "1000", False, 0],
-    ["e49424", "GLO1440 ", "Brazil", 1716231245, 1716231245, -46.5200, -23.4800, 1200.0, False, 90.5, 305.1, -3.5, None, 1250.0, "2341", False, 0],
-    ["e48c31", "AZU4561 ", "Brazil", 1716231244, 1716231245, -46.3500, -23.4000, 2500.0, False, 140.2, 280.0, 0.0, None, 2600.0, "5213", False, 0],
-    ["a3b1c2", "TAP025  ", "Portugal", 1716231245, 1716231245, -46.4000, -23.5000, 950.0, False, 85.0, 310.0, -5.0, None, 980.0, "4421", False, 0],
-    ["e47d11", "GOL1212 ", "Brazil", 1716231245, 1716231245, -46.6000, -23.3500, 3200.0, False, 180.0, 130.0, 2.5, None, 3300.0, "1200", False, 0],
-    ["e8921a", "LATAM90 ", "Chile", 1716231245, 1716231245, -46.4500, -23.5500, 1500.0, False, 110.0, 350.0, -2.0, None, 1550.0, "3311", False, 0]
-]
-
-# --- FUNÇÕES ---
+# --- FUNÇÕES (API NOVA: ADSB.lol) ---
 
 def get_real_flights_gru():
     """
-    Tenta pegar dados AO VIVO da OpenSky.
-    Se der erro 429 (Too Many Requests), usa o SNAPSHOT REAL.
+    Busca dados na ADSB.lol (API Comunitária Open Source).
+    Endpoint: Busca por raio (lat/lon/raio).
     """
-    url = "https://opensky-network.org/api/states/all?lamin=-23.8&lomin=-46.8&lamax=-23.0&lomax=-46.0"
-    cols = ['icao24', 'callsign', 'origin_country', 'time_position', 'last_contact', 'longitude', 'latitude', 'baro_altitude', 'on_ground', 'velocity', 'true_track', 'vertical_rate', 'sensors', 'geo_altitude', 'squawk', 'spi', 'position_source']
+    # Coordenadas GRU
+    lat = -23.4356
+    lon = -46.4731
+    radius_nm = 50 # Raio de 50 milhas náuticas
+    
+    url = f"https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{radius_nm}"
     
     try:
         r = requests.get(url, timeout=5)
         
-        # SUCESSO (200)
         if r.status_code == 200:
-            json_data = r.json()
-            if json_data['states']:
-                df = pd.DataFrame(json_data['states'], columns=cols)
-                return df, "🟢 LIVE (API)"
-            else:
-                return pd.DataFrame(), "🟡 LIVE (Sem voos)"
-
-        # ERRO DE LIMITE (429) -> USA SNAPSHOT
-        elif r.status_code == 429:
-            df = pd.DataFrame(SNAPSHOT_REAL_DATA, columns=cols)
-            return df, "🔴 LIMITADA (Usando Snapshot Real)"
+            data = r.json()
+            if not data.get('ac'): return pd.DataFrame()
             
+            flights = []
+            for ac in data['ac']:
+                # A API retorna dados brutos, precisamos tratar se existem
+                if 'lat' in ac and 'lon' in ac:
+                    flights.append({
+                        'callsign': ac.get('flight', 'N/A').strip(),
+                        'icao24': ac.get('hex', ''),
+                        'latitude': ac.get('lat'),
+                        'longitude': ac.get('lon'),
+                        # Conversões: Knots -> km/h, Feet -> Metros
+                        'velocity': ac.get('gs', 0) * 1.852, 
+                        'baro_altitude': ac.get('alt_baro', 0) * 0.3048,
+                        'origin_country': 'Unknown', # Essa API não foca no país
+                        'vertical_rate': ac.get('baro_rate', 0)
+                    })
+            
+            df = pd.DataFrame(flights)
+            # Filtros de Qualidade
+            df = df[df['callsign'] != 'N/A'] # Remove quem está sem identificação
+            df = df[df['baro_altitude'] > 0] # Remove erros de altitude 0
+            
+            return df
         else:
-            return pd.DataFrame(), f"Erro {r.status_code}"
+            st.error(f"Erro na API ADSB.lol: {r.status_code}")
+            return pd.DataFrame()
             
     except Exception as e:
-        # TIMEOUT/ERRO -> USA SNAPSHOT
-        df = pd.DataFrame(SNAPSHOT_REAL_DATA, columns=cols)
-        return df, "🔴 OFFLINE (Usando Snapshot Real)"
+        st.error(f"Erro de Conexão: {e}")
+        return pd.DataFrame()
 
 def get_real_weather(lat, lon):
     try:
@@ -74,42 +77,31 @@ def get_real_weather(lat, lon):
         r = requests.get(url, timeout=3)
         return r.json()['current']
     except:
-        return {'temperature_2m': 24, 'precipitation': 0, 'wind_speed_10m': 12}
+        return None
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("AERO.OPS V2")
+    st.title("AERO.OPS V3")
+    st.caption("Powered by ADSB.lol API")
     st.markdown("---")
     
-    # BOTÃO MANUAL
-    if st.button("📡 ATUALIZAR RADAR"):
-        st.session_state['refresh'] = True
+    if st.button("📡 ATUALIZAR AO VIVO"):
+        st.rerun() # Recarrega o app forçando nova chamada
     
     st.markdown("---")
-    st.write("🎯 ALVO: SBGR (Guarulhos)")
-    lat_gru = -23.4356
-    lon_gru = -46.4731
+    st.info("Esta API (ADSB.lol) não exige cadastro e é alimentada pela comunidade. Muito mais rápida e estável.")
 
 # --- DASHBOARD ---
-st.title("RADAR DE CONTROLE (GRU)")
+st.title("RADAR DE TRÁFEGO: GUARULHOS (SBGR)")
+lat_gru = -23.4356
+lon_gru = -46.4731
 
-# Busca dados
-with st.spinner("Contactando torre..."):
-    df_raw, status_msg = get_real_flights_gru()
+# Busca Dados
+with st.spinner("Rastreando transponders ADS-B..."):
+    df_voos = get_real_flights_gru()
 
-# Exibe Status da Conexão
-if "LIVE" in status_msg:
-    st.toast(f"Status: {status_msg}", icon="📡")
-else:
-    st.warning(f"⚠️ API Instável: {status_msg}. Exibindo dados de cache recente.")
-
-# Lógica de Exibição
-if not df_raw.empty:
-    
-    # Limpeza de Dados (O desafio do aluno)
-    df_voos = df_raw.copy()
-    df_voos['callsign'] = df_voos['callsign'].str.strip()
-    df_voos = df_voos.dropna(subset=['latitude', 'longitude'])
+if not df_voos.empty:
+    st.toast(f"{len(df_voos)} voos detectados via ADS-B", icon="✈️")
     
     # 1. MAPA
     fig = px.scatter_mapbox(
@@ -117,37 +109,45 @@ if not df_raw.empty:
         lat="latitude", lon="longitude",
         hover_name="callsign",
         hover_data=["velocity", "baro_altitude"],
-        color="velocity",
-        color_continuous_scale=["#00ff00", "#ffff00", "#ff0000"],
-        size_max=20, zoom=8, height=500
+        color="baro_altitude",
+        size_max=15, zoom=8, height=500,
+        color_continuous_scale="Viridis"
     )
-    fig.add_scattermapbox(lat=[lat_gru], lon=[lon_gru], name="SBGR", marker=dict(size=20, color='white'))
+    # Adiciona GRU no mapa
+    fig.add_scattermapbox(lat=[lat_gru], lon=[lon_gru], name="GRU Airport", marker=dict(size=25, color='red'))
+    
     fig.update_layout(mapbox_style="carto-darkmatter", margin={"r":0,"t":0,"l":0,"b":0})
     st.plotly_chart(fig, use_container_width=True)
     
-    # 2. TABELA
-    st.subheader("📋 Lista de Tráfego")
-    st.dataframe(df_voos[['callsign', 'origin_country', 'velocity', 'baro_altitude', 'on_ground']], use_container_width=True)
-    
-    # 3. CÁLCULO
+    # 2. CÁLCULO DE APROXIMAÇÃO
     st.markdown("---")
-    st.subheader("🧮 Telemetria")
+    col_kpi, col_table = st.columns([1, 2])
     
-    voo = st.selectbox("Selecionar Voo:", df_voos['callsign'].unique())
-    if voo:
-        dados_voo = df_voos[df_voos['callsign'] == voo].iloc[0]
-        dist = geodesic((dados_voo['latitude'], dados_voo['longitude']), (lat_gru, lon_gru)).km
-        vel = dados_voo['velocity'] * 3.6
+    with col_kpi:
+        st.subheader("🔭 Focar Aeronave")
+        lista_voos = df_voos['callsign'].unique()
+        voo_sel = st.selectbox("Callsign:", lista_voos)
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Distância GRU", f"{dist:.1f} km")
-        c2.metric("Velocidade", f"{vel:.0f} km/h")
-        c3.metric("Altitude", f"{dados_voo['baro_altitude']:.0f} m")
+        if voo_sel:
+            dado = df_voos[df_voos['callsign'] == voo_sel].iloc[0]
+            dist = geodesic((dado['latitude'], dado['longitude']), (lat_gru, lon_gru)).km
+            
+            st.metric("Distância da Pista", f"{dist:.1f} km")
+            st.metric("Velocidade Solo", f"{dado['velocity']:.0f} km/h")
+            st.metric("Altitude", f"{dado['baro_altitude']:.0f} m")
+            
+    with col_table:
+        st.subheader("📋 Lista de Chegadas")
+        st.dataframe(
+            df_voos[['callsign', 'velocity', 'baro_altitude']].sort_values('baro_altitude'),
+            use_container_width=True,
+            height=300
+        )
 
     # DOWNLOAD
     st.markdown("---")
     csv = df_voos.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Baixar Dados (CSV)", csv, "radar_log.csv", "text/csv")
+    st.download_button("📥 Baixar Dados ADS-B (CSV)", csv, "adsb_log.csv", "text/csv")
 
 else:
-    st.error("Erro crítico no sistema de radar.")
+    st.warning("Nenhum dado recebido. Tente clicar em 'ATUALIZAR' novamente.")
