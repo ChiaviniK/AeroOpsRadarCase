@@ -20,17 +20,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÕES (API NOVA: ADSB.lol) ---
+# --- FUNÇÕES (ADSB.lol com Tratamento de Tipos) ---
+
+def safe_float(val):
+    """Converte qualquer coisa para float. Se falhar, retorna 0.0"""
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
 
 def get_real_flights_gru():
-    """
-    Busca dados na ADSB.lol (API Comunitária Open Source).
-    Endpoint: Busca por raio (lat/lon/raio).
-    """
     # Coordenadas GRU
     lat = -23.4356
     lon = -46.4731
-    radius_nm = 50 # Raio de 50 milhas náuticas
+    radius_nm = 50 
     
     url = f"https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{radius_nm}"
     
@@ -43,53 +46,54 @@ def get_real_flights_gru():
             
             flights = []
             for ac in data['ac']:
-                # A API retorna dados brutos, precisamos tratar se existem
+                # Verifica se tem lat/lon antes de processar
                 if 'lat' in ac and 'lon' in ac:
+                    
+                    # --- CORREÇÃO DO ERRO AQUI ---
+                    # Convertemos para float antes de multiplicar
+                    gs_knots = safe_float(ac.get('gs', 0))
+                    alt_feet = safe_float(ac.get('alt_baro', 0))
+                    vert_rate = safe_float(ac.get('baro_rate', 0))
+                    
                     flights.append({
-                        'callsign': ac.get('flight', 'N/A').strip(),
-                        'icao24': ac.get('hex', ''),
-                        'latitude': ac.get('lat'),
-                        'longitude': ac.get('lon'),
-                        # Conversões: Knots -> km/h, Feet -> Metros
-                        'velocity': ac.get('gs', 0) * 1.852, 
-                        'baro_altitude': ac.get('alt_baro', 0) * 0.3048,
-                        'origin_country': 'Unknown', # Essa API não foca no país
-                        'vertical_rate': ac.get('baro_rate', 0)
+                        'callsign': str(ac.get('flight', 'N/A')).strip(),
+                        'icao24': str(ac.get('hex', '')),
+                        'latitude': safe_float(ac.get('lat')),
+                        'longitude': safe_float(ac.get('lon')),
+                        # Agora a multiplicação é segura (float * float)
+                        'velocity': gs_knots * 1.852,     # Knots -> km/h
+                        'baro_altitude': alt_feet * 0.3048, # Feet -> Metros
+                        'origin_country': 'Unknown', 
+                        'vertical_rate': vert_rate
                     })
             
             df = pd.DataFrame(flights)
+            
             # Filtros de Qualidade
-            df = df[df['callsign'] != 'N/A'] # Remove quem está sem identificação
-            df = df[df['baro_altitude'] > 0] # Remove erros de altitude 0
+            if not df.empty:
+                df = df[df['callsign'] != 'N/A'] 
+                df = df[df['baro_altitude'] > 0]
             
             return df
         else:
-            st.error(f"Erro na API ADSB.lol: {r.status_code}")
             return pd.DataFrame()
             
     except Exception as e:
-        st.error(f"Erro de Conexão: {e}")
+        # Mostra erro no terminal para debug, mas não quebra o app
+        print(f"Erro de dados: {e}")
         return pd.DataFrame()
-
-def get_real_weather(lat, lon):
-    try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,precipitation,wind_speed_10m&timezone=America%2FSao_Paulo"
-        r = requests.get(url, timeout=3)
-        return r.json()['current']
-    except:
-        return None
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("AERO.OPS V3")
+    st.title("AERO.OPS V3.1")
     st.caption("Powered by ADSB.lol API")
     st.markdown("---")
     
     if st.button("📡 ATUALIZAR AO VIVO"):
-        st.rerun() # Recarrega o app forçando nova chamada
+        st.rerun()
     
     st.markdown("---")
-    st.info("Esta API (ADSB.lol) não exige cadastro e é alimentada pela comunidade. Muito mais rápida e estável.")
+    st.info("Sistema conectado à rede ADS-B Global (Open Source).")
 
 # --- DASHBOARD ---
 st.title("RADAR DE TRÁFEGO: GUARULHOS (SBGR)")
@@ -113,13 +117,12 @@ if not df_voos.empty:
         size_max=15, zoom=8, height=500,
         color_continuous_scale="Viridis"
     )
-    # Adiciona GRU no mapa
     fig.add_scattermapbox(lat=[lat_gru], lon=[lon_gru], name="GRU Airport", marker=dict(size=25, color='red'))
     
     fig.update_layout(mapbox_style="carto-darkmatter", margin={"r":0,"t":0,"l":0,"b":0})
     st.plotly_chart(fig, use_container_width=True)
     
-    # 2. CÁLCULO DE APROXIMAÇÃO
+    # 2. DETALHES
     st.markdown("---")
     col_kpi, col_table = st.columns([1, 2])
     
@@ -151,3 +154,4 @@ if not df_voos.empty:
 
 else:
     st.warning("Nenhum dado recebido. Tente clicar em 'ATUALIZAR' novamente.")
+    st.caption("Se persistir, verifique se há voos na região de GRU agora.")
