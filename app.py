@@ -7,89 +7,95 @@ from datetime import datetime
 from geopy.distance import geodesic
 
 # --- Configuração "Air Traffic Control (ATC)" ---
-st.set_page_config(page_title="AeroOps Radar", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="AeroOps Radar | Rio-SP", page_icon="✈️", layout="wide")
 
-# --- CSS CUSTOMIZADO ---
+# --- CSS CUSTOMIZADO (Dark Terminal Theme) ---
 st.markdown("""
 <style>
     .stApp { background-color: #050505; color: #00ff41; }
     h1, h2, h3, div, span, p, label { font-family: 'Courier New', monospace !important; }
     h1, h2, h3 { color: #00ff41 !important; text-transform: uppercase; text-shadow: 0 0 5px #003300; }
+    
+    /* Metrics Cards */
     div[data-testid="stMetric"] {
         background-color: #0f111a;
         border: 1px solid #00ff41;
         box-shadow: 0 0 10px rgba(0, 255, 65, 0.1);
-        padding: 10px;
     }
     div[data-testid="stMetricLabel"] { color: #00cc33; font-size: 0.8rem; }
     div[data-testid="stMetricValue"] { color: #ffffff; text-shadow: 0 0 5px #fff; }
+    
+    /* Inputs e Botões */
     .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div {
-        background-color: #0f111a;
-        color: #00ff41;
-        border: 1px solid #004411;
+        background-color: #0f111a; color: #00ff41; border: 1px solid #004411;
     }
     .stButton>button {
-        background-color: #003300; 
-        color: #00ff41; 
-        border: 1px solid #00ff41;
-        border-radius: 0px;
-        font-weight: bold;
-        transition: all 0.3s;
+        background-color: #003300; color: #00ff41; border: 1px solid #00ff41;
+        border-radius: 0px; font-weight: bold; transition: all 0.3s;
     }
     .stButton>button:hover {
-        background-color: #00ff41;
-        color: black;
-        box-shadow: 0 0 15px #00ff41;
+        background-color: #00ff41; color: black; box-shadow: 0 0 15px #00ff41;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÕES DE DADOS (SEM ELEMENTOS VISUAIS DENTRO DO CACHE) ---
+# --- FUNÇÕES DE DADOS (HÍBRIDAS E OTIMIZADAS) ---
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=15) # Cache curto para sensação de tempo real
 def get_live_flights():
     """
-    Apenas processa dados. Retorna o DataFrame e um Booleano (True=Real, False=Fake).
-    NÃO TEM st.toast AQUI DENTRO.
+    Busca voos no corredor Rio-SP (Mais leve que buscar Brasil todo).
+    Se falhar, gera simulação realista.
     """
-    url = "https://opensky-network.org/api/states/all?lamin=-33.7&lomin=-73.9&lamax=5.2&lomax=-34.7"
+    # Bounding Box: Eixo Rio-SP (Diminui carga na API)
+    url = "https://opensky-network.org/api/states/all?lamin=-24.5&lomin=-47.5&lamax=-22.0&lomax=-42.0"
     
-    # 1. Tenta API Real
+    # 1. TENTATIVA REAL (OPENSKY)
     try:
-        r = requests.get(url, timeout=4)
+        r = requests.get(url, timeout=4) # Timeout curto
         if r.status_code == 200:
-            data = r.json()
-            if data['states'] is None: raise Exception("Sem dados")
-            
-            cols = ['icao24', 'callsign', 'origin_country', 'time_position', 'last_contact', 'longitude', 'latitude', 'baro_altitude', 'on_ground', 'velocity', 'true_track', 'vertical_rate', 'sensors', 'geo_altitude', 'squawk', 'spi', 'position_source']
-            df = pd.DataFrame(data['states'], columns=cols)
-            
-            df['callsign'] = df['callsign'].str.strip()
-            df = df[(df['baro_altitude'] > 2000) & (df['velocity'] > 50)]
-            df = df.dropna(subset=['latitude', 'longitude'])
-            
-            if not df.empty:
-                return df, True # Retorna True para dados reais
+            json_data = r.json()
+            if json_data['states'] is not None:
+                cols = ['icao24', 'callsign', 'origin_country', 'time_position', 'last_contact', 'longitude', 'latitude', 'baro_altitude', 'on_ground', 'velocity', 'true_track', 'vertical_rate', 'sensors', 'geo_altitude', 'squawk', 'spi', 'position_source']
+                df = pd.DataFrame(json_data['states'], columns=cols)
+                
+                # Limpeza
+                df['callsign'] = df['callsign'].str.strip()
+                # Apenas voos comerciais altos e rápidos
+                df = df[(df['baro_altitude'] > 2000) & (df['velocity'] > 50)]
+                df = df.dropna(subset=['latitude', 'longitude'])
+                
+                if not df.empty:
+                    return df, True # True = Dados Reais
     except:
-        pass 
+        pass # Falhou silenciosamente, vai para o plano B
 
-    # 2. Simulação (Fallback)
-    dados_fake = []
-    for i in range(20):
-        lat = -23.5 + random.uniform(-5, 5)
-        lon = -46.6 + random.uniform(-5, 5)
-        dados_fake.append({
-            'callsign': f"GLO{random.randint(1000, 9999)}",
+    # 2. SIMULAÇÃO REALISTA (FALLBACK)
+    # Gera aviões "fakes" mas com nomes reais (TAM, GLO, AZU) na rota Rio-SP
+    fake_data = []
+    cias = ['TAM', 'GLO', 'AZU']
+    
+    for i in range(12): # 12 aviões na tela
+        lat = random.uniform(-24.0, -22.5) # Entre SP e Rio
+        lon = random.uniform(-46.5, -43.0)
+        cia = random.choice(cias)
+        num = random.randint(1000, 9999)
+        
+        fake_data.append({
+            'callsign': f"{cia}{num}",
             'latitude': lat,
             'longitude': lon,
-            'velocity': random.uniform(200, 260),
-            'baro_altitude': random.uniform(8000, 11000),
+            'velocity': random.uniform(200, 260), # ~800km/h (m/s)
+            'baro_altitude': random.uniform(8000, 11000), # ~30k pés
             'origin_country': 'Brazil',
-            'true_track': random.uniform(0, 360)
+            'true_track': random.uniform(45, 65) # Direção Nordeste (SP->Rio)
         })
-    return pd.DataFrame(dados_fake), False # Retorna False para simulado
+    
+    return pd.DataFrame(fake_data), False # False = Dados Simulados
 
+@st.cache_data(ttl=300)
 def get_weather(lat, lon):
+    """Busca clima no destino (Open-Meteo é muito estável)"""
     try:
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,precipitation,wind_speed_10m&timezone=America%2FSao_Paulo"
         r = requests.get(url, timeout=5)
@@ -97,16 +103,8 @@ def get_weather(lat, lon):
     except:
         return {'temperature_2m': 25.0, 'precipitation': 0.0, 'wind_speed_10m': 10.0}
 
-# --- LOGICA DE EXIBIÇÃO (TOASTS AQUI FORA) ---
-
-# Chama a função cached
+# --- LÓGICA DE CARGA (SEM VISUAL NO CACHE) ---
 df_voos, is_real_data = get_live_flights()
-
-# Mostra os avisos agora (fora do cache)
-if is_real_data:
-    st.toast("📡 Link OpenSky: ATIVO (Dados Reais)", icon="🟢")
-else:
-    st.toast("⚠️ Link OpenSky: INSTÁVEL (Modo Simulação Ativo)", icon="🟠")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -114,26 +112,26 @@ with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/airport.png", width=80)
     st.markdown("---")
     
-    st.write("STATUS DO SISTEMA:")
+    st.write("STATUS DO RADAR:")
     if is_real_data:
-        st.success("RADAR: ONLINE (LIVE)")
+        st.success("LINK: OPENSKY (LIVE)")
+        st.toast("📡 Radar Online: Dados Reais", icon="🟢")
     else:
-        st.warning("RADAR: SIMULATION MODE")
+        st.warning("LINK: SIMULATOR (BACKUP)")
+        st.toast("⚠️ Radar Instável: Modo Simulação", icon="🟠")
     
     st.markdown("---")
-    st.subheader("✈️ Rota Monitorada")
+    st.subheader("✈️ Plano de Voo (Destino)")
     
-    origem_lat = st.number_input("Lat Origem (GRU)", value=-23.4356, format="%.4f")
-    origem_lon = st.number_input("Lon Origem (GRU)", value=-46.4731, format="%.4f")
-    
-    dest_lat = st.number_input("Lat Destino (GIG)", value=-22.8089, format="%.4f")
-    dest_lon = st.number_input("Lon Destino (GIG)", value=-43.2436, format="%.4f")
+    # Defaults: Congonhas (CGH) -> Santos Dumont (SDU)
+    dest_lat = st.number_input("Lat Destino (SDU)", value=-22.9105, format="%.4f")
+    dest_lon = st.number_input("Lon Destino (SDU)", value=-43.1631, format="%.4f")
 
 # --- INTERFACE PRINCIPAL ---
-st.title("TORRE DE CONTROLE: MONITORAMENTO AÉREO")
+st.title("PONTE AÉREA: MONITORAMENTO TÁTICO")
 
-# 1. MAPA
-st.subheader("📍 Radar Tático (Brasil)")
+# 1. MAPA DE RADAR
+st.subheader("📍 Radar Eixo Rio-SP")
 
 if not df_voos.empty:
     fig_map = px.scatter_mapbox(
@@ -143,7 +141,7 @@ if not df_voos.empty:
         hover_data=["velocity", "baro_altitude"],
         color="velocity", 
         color_continuous_scale=["#00ff41", "#ffff00", "#ff0000"],
-        size_max=15, zoom=4, height=500
+        size_max=15, zoom=6, height=500
     )
     fig_map.update_layout(
         mapbox_style="carto-darkmatter",
@@ -152,92 +150,97 @@ if not df_voos.empty:
     )
     st.plotly_chart(fig_map, use_container_width=True)
 else:
-    st.error("Erro crítico no sistema de radar.")
+    st.error("Erro crítico: Nenhum dado de voo disponível.")
 
 st.markdown("---")
 
-# 2. PAINEL DE PREDIÇÃO
-st.subheader("🛑 Predição de Atrasos & Telemetria")
+# 2. ANÁLISE PREDITIVA
+st.subheader("🛑 Calculadora de Atraso (ETA Dinâmico)")
 
 if not df_voos.empty:
-    voos_lista = df_voos['callsign'].unique()
-    voo_selecionado = st.selectbox("SELECIONE A AERONAVE PARA RASTREIO:", voos_lista)
+    col_sel, col_kpi = st.columns([1, 3])
+    
+    with col_sel:
+        # Lista de voos para o aluno escolher
+        voos_lista = df_voos['callsign'].unique()
+        voo_selecionado = st.selectbox("RASTREAR AERONAVE:", voos_lista)
     
     if voo_selecionado:
+        # Extrai dados do voo escolhido
         dado = df_voos[df_voos['callsign'] == voo_selecionado].iloc[0]
-        clima_dest = get_weather(dest_lat, dest_lon)
         
-        # Cálculos
+        # Busca clima no destino
+        clima = get_weather(dest_lat, dest_lon)
+        
+        # --- CÁLCULOS (O DESAFIO DO ALUNO) ---
         pos_aviao = (dado['latitude'], dado['longitude'])
         pos_dest = (dest_lat, dest_lon)
+        
+        # 1. Distância Real (Geodesic)
         dist_km = geodesic(pos_aviao, pos_dest).km
+        
+        # 2. Conversões
         vel_kmh = dado['velocity'] * 3.6
-        altitude_ft = dado['baro_altitude'] * 3.28084
+        alt_ft = dado['baro_altitude'] * 3.28084
         
+        # 3. ETA Simples
         if vel_kmh > 0:
-            minutos_restantes = int((dist_km / vel_kmh) * 60)
+            minutos_voo = int((dist_km / vel_kmh) * 60)
         else:
-            minutos_restantes = 999
+            minutos_voo = 999
             
-        # Risco
-        risco_score = 0
-        fatores = []
+        # 4. Algoritmo de Risco (Regra de Negócio)
+        risco = 0
+        msgs = []
         
-        if clima_dest['wind_speed_10m'] > 25:
-            risco_score += 30
-            fatores.append(f"Vento Cruzado ({clima_dest['wind_speed_10m']} km/h)")
+        # Vento > 25km/h
+        if clima['wind_speed_10m'] > 25:
+            risco += 30
+            msgs.append(f"Vento Forte: {clima['wind_speed_10m']} km/h")
             
-        if clima_dest['precipitation'] > 0.5:
-            risco_score += 40
-            fatores.append(f"Chuva na Pista ({clima_dest['precipitation']} mm)")
+        # Chuva > 0.5mm
+        if clima['precipitation'] > 0.5:
+            risco += 40
+            msgs.append(f"Chuva na Pista: {clima['precipitation']} mm")
             
-        if vel_kmh < 600 and altitude_ft > 20000:
-            risco_score += 20
-            fatores.append("Velocidade Cruzeiro Baixa")
-            
-        if minutos_restantes > 120:
-            risco_score += 10
+        # Penalidade Distância Longa vs Baixa Vel
+        if minutos_voo > 45 and vel_kmh < 400:
+            risco += 20
+            msgs.append("Aproximação Lenta")
 
-        # Exibição
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("CALLSIGN", voo_selecionado)
-        c2.metric("VELOCIDADE", f"{int(vel_kmh)} km/h")
-        c3.metric("ALTITUDE", f"{int(altitude_ft)} ft")
-        c4.metric("ETA ESTIMADO", f"{minutos_restantes} min")
+        # --- EXIBIÇÃO DE DADOS ---
+        with col_kpi:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("DISTÂNCIA RESTANTE", f"{int(dist_km)} km")
+            c2.metric("VELOCIDADE SOLO", f"{int(vel_kmh)} km/h")
+            c3.metric("TEMPO ESTIMADO", f"{minutos_voo} min")
         
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("---")
         
-        col_risk, col_env = st.columns([1, 2])
+        # Painel de Decisão
+        c_risk, c_weather = st.columns(2)
         
-        with col_risk:
-            st.markdown("#### STATUS DE RISCO")
-            if risco_score > 50:
-                st.error(f"CRÍTICO ({risco_score}%)")
-                st.markdown("🔴 **ALTA PROBABILIDADE DE ATRASO**")
-            elif risco_score > 20:
-                st.warning(f"ATENÇÃO ({risco_score}%)")
-                st.markdown("🟠 **MONITORAR CONDIÇÕES**")
+        with c_risk:
+            st.markdown("#### ⚠️ Nível de Risco")
+            if risco > 50:
+                st.error(f"ALTO RISCO DE ATRASO ({risco}%)")
+            elif risco > 20:
+                st.warning(f"RISCO MODERADO ({risco}%)")
             else:
-                st.success(f"NOMINAL ({risco_score}%)")
-                st.markdown("🟢 **VOO NO HORÁRIO**")
+                st.success(f"OPERAÇÃO NORMAL ({risco}%)")
             
-            if fatores:
-                st.markdown("**Fatores:**")
-                for f in fatores: st.caption(f"> {f}")
-        
-        with col_env:
-            st.markdown("#### TELEMETRIA AMBIENTAL (DESTINO)")
-            df_clima = pd.DataFrame([
-                {"METRIC": "TEMPERATURA", "VALUE": f"{clima_dest['temperature_2m']} °C"},
-                {"METRIC": "PRECIPITAÇÃO", "VALUE": f"{clima_dest['precipitation']} mm"},
-                {"METRIC": "VEL. VENTO", "VALUE": f"{clima_dest['wind_speed_10m']} km/h"}
-            ])
-            st.dataframe(df_clima, hide_index=True, use_container_width=True)
+            for m in msgs: st.caption(f"> {m}")
+            
+        with c_weather:
+            st.markdown("#### 🌦️ Condições no Destino")
+            cols_w = st.columns(3)
+            cols_w[0].metric("Temp", f"{clima['temperature_2m']}°C")
+            cols_w[1].metric("Chuva", f"{clima['precipitation']}mm")
+            cols_w[2].metric("Vento", f"{clima['wind_speed_10m']}km/h")
 
 # --- DOWNLOADS ---
 st.markdown("---")
-st.subheader("💾 CAIXA PRETA (LOGS)")
-
+st.subheader("💾 Black Box Data")
 if not df_voos.empty:
     csv = df_voos.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 BAIXAR DADOS DE VOO (CSV)", csv, "flight_log.csv", "text/csv")
+    st.download_button("📥 Baixar Telemetria (CSV)", csv, "flight_logs.csv", "text/csv")
